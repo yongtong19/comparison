@@ -5,8 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import lpips
-from torch.amp import autocast, GradScaler
+from torch.amp import autocast
 
 import models
 from metrics import compute_metrics
