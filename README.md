@@ -16,6 +16,12 @@ dataset/
         ...
 ```
 
+# Clone the repository
+
+```bash
+git clone https://github.com/yongtong19/comparison.git
+```
+
 # Create a virtual environment
 
 ## Option 1 (with venv and pip)
