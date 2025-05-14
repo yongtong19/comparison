@@ -1,79 +1,59 @@
 import os
+import glob
 import torch
-import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from scipy.io import loadmat
 
 
-class ct_dataset(Dataset):
+class CTDataset(Dataset):
     def __init__(
         self,
-        mode,
-        saved_path=None,
-        dataset=None,
+        dataset: str,
     ):
-        assert mode in ["train", "test"], "mode is 'train' or 'test'"
+        assert os.path.exists(dataset), "dataset does not exist"
 
-        # if mode == "train":
-        #     self.input_path = "/mnt/new_ssd/dataset/restormer/XCAT90/train/Low_dose"
-        #     self.target_path = "/mnt/new_ssd/dataset/restormer/XCAT90/train/High_dose"
-        #     # self.input_path = "/mnt/new_ssd/dataset/restormer/GE512/Train/AAPM/Low_dose"
-        #     # self.target_path = (
-        #     #     "/mnt/new_ssd/dataset/restormer/GE512/Train/AAPM/High_dose"
-        #     # )
-        # elif mode == "test":
-        #     self.input_path = "/mnt/new_ssd/dataset/restormer/XCAT90/test/Low_dose"
-        #     self.target_path = "/mnt/new_ssd/dataset/restormer/XCAT90/test/High_dose"
-        #     # self.input_path = "/mnt/new_ssd/dataset/restormer/GE512/Test/AAPM/Low_dose"
-        #     # self.target_path = (
-        #     #     "/mnt/new_ssd/dataset/restormer/GE512/Test/AAPM/High_dose"
-        #     # )
-
-        # self.input_files = os.listdir(self.input_path)
-        # self.target_files = os.listdir(self.target_path)
-
-        assert saved_path is not None or dataset is not None, (
-            "saved_path or dataset must be provided"
-        )
-        if dataset is not None:
-            data_path = dataset
-        else:
-            data_path = saved_path
-
-        data = torch.load(data_path)
-        print(f"loaded dataset from {data_path} shape {data.shape}")
-        self.input_files = [f"{i}.npy" for i in range(data.shape[0])]
-        self.target_files = [f"{i}.npy" for i in range(data.shape[0])]
-        self.input_data = data[:, 0]
-        self.target_data = data[:, 1]
-        self.image_size = self.input_data.shape[-1]
-        self.input_data = self.input_data.view(
-            self.input_data.shape[0], 1, self.image_size, self.image_size
-        )
-        self.target_data = self.target_data.view(
-            self.target_data.shape[0], 1, self.image_size, self.image_size
-        )
+        self.dataset = dataset
+        self.input_files = sorted(glob.glob(os.path.join(dataset, "img", "*.mat")))
+        self.target_files = sorted(glob.glob(os.path.join(dataset, "label", "*.mat")))
 
     def __len__(self):
-        return len(self.input_data)
+        return len(self.input_files)
 
     def __getitem__(self, idx):
+        input_file = self.input_files[idx]
+        target_file = self.target_files[idx]
+
+        if input_file.endswith(".mat"):
+            input_data = loadmat(os.path.join(self.dataset, "img", input_file)).get(
+                "imagesparse"
+            )
+
+        if target_file.endswith(".mat"):
+            target_data = loadmat(os.path.join(self.dataset, "label", target_file)).get(
+                "imagef"
+            )
+
         return (
-            self.input_data[idx],
-            self.target_data[idx],
-            self.input_files[idx],
-            self.target_files[idx],
+            torch.from_numpy(input_data).reshape(
+                1, input_data.shape[-2], input_data.shape[-1]
+            ),
+            torch.from_numpy(target_data).reshape(
+                1, target_data.shape[-2], target_data.shape[-1]
+            ),
         )
+
+    @property
+    def image_size(self):
+        return self.__getitem__(0).shape[-1]
 
 
 def get_loader(
-    mode="train",
-    saved_path=None,
-    dataset=None,
-    batch_size=32,
-    shuffle=True,
-    num_workers=4,
+    dataset: str,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int,
 ):
-    dataset_ = ct_dataset(mode, saved_path, dataset)
+    dataset_ = CTDataset(dataset)
     data_loader = DataLoader(
         dataset=dataset_,
         batch_size=batch_size,

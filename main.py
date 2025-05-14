@@ -1,84 +1,97 @@
 import os
-import argparse
-from torch.backends import cudnn
 from loader import get_loader
 from solver import Solver
 from datetime import datetime
 import yaml
+import click
 
 
-def dump_config(args):
-    with open(os.path.join(args.save_path, "config.yaml"), "w") as f:
-        yaml.dump(args, f)
+@click.command()
+@click.option("--mode", type=str, default="train")
+@click.option("--model_name", type=str, default="REDCNN")
+@click.option("--batch_size", type=int, default=1)
+@click.option("--dataset", required=True, type=str)
+@click.option(
+    "--save_path", type=str, default=f"save/{datetime.now().strftime('%Y%m%d%H%M%S')}"
+)
+@click.option("--image_size", type=int, default=512)
+@click.option("--device", type=str, default="cuda")
+@click.option("--num_workers", type=int, default=4)
+@click.option("--train_num_epochs", type=int, default=20)
+@click.option("--train_log_interval", type=int, default=20)
+@click.option("--train_decay_interval", type=int, default=0)
+@click.option("--train_checkpoint_interval", type=int, default=0)
+@click.option("--train_lr", type=float, default=1e-4)
+@click.option("--train_criterion", type=str, default="mse")
+@click.option("--train_use_amp", type=bool, default=True)
+@click.option("--test_data_range", type=float, default=1.0)
+@click.option("--test_save_result", type=bool, default=True)
+@click.option("--test_checkpoint_path", type=str, default=None)
+def main(
+    mode,
+    model_name,
+    batch_size,
+    dataset,
+    save_path,
+    image_size,
+    device,
+    num_workers,
+    train_num_epochs,
+    train_log_interval,
+    train_decay_interval,
+    train_checkpoint_interval,
+    train_lr,
+    train_criterion,
+    train_use_amp,
+    test_data_range,
+    test_save_result,
+    test_checkpoint_path,
+):
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+        print("Create path : {}".format(save_path))
 
+    solver_config = {
+        "mode": mode,
+        "model_name": model_name,
+        "batch_size": batch_size,
+        "dataset": dataset,
+        "save_path": save_path,
+        "image_size": image_size,
+        "device": device,
+        "num_workers": num_workers,
+        "train_num_epochs": train_num_epochs,
+        "train_log_interval": train_log_interval,
+        "train_decay_interval": train_decay_interval,
+        "train_checkpoint_interval": train_checkpoint_interval,
+        "train_lr": train_lr,
+        "train_criterion": train_criterion,
+        "train_use_amp": train_use_amp,
+        "test_data_range": test_data_range,
+        "test_save_result": test_save_result,
+        "test_checkpoint_path": test_checkpoint_path,
+    }
 
-def main(args):
-    cudnn.benchmark = True
-
-    if not os.path.exists(args.save_path):
-        os.makedirs(args.save_path)
-        print("Create path : {}".format(args.save_path))
-
-    if args.result_fig:
-        fig_path = os.path.join(args.save_path, "fig")
-        if not os.path.exists(fig_path):
-            os.makedirs(fig_path)
-            print("Create path : {}".format(fig_path))
+    with open(os.path.join(save_path, "config.yaml"), "w") as f:
+        yaml.dump(solver_config, f)
 
     data_loader = get_loader(
-        mode=args.mode,
-        saved_path=args.saved_path,
-        dataset=args.dataset,
-        batch_size=(args.batch_size if args.mode == "train" else 1),
-        shuffle=(True if args.mode == "train" else False),
-        num_workers=args.num_workers,
+        dataset=dataset,
+        batch_size=(batch_size if mode == "train" else 1),
+        shuffle=(True if mode == "train" else False),
+        num_workers=num_workers,
     )
 
-    solver = Solver(args, data_loader)
-    dump_config(args)
+    solver = Solver(
+        config=solver_config,
+        data_loader=data_loader,
+    )
 
-    if args.mode == "train":
+    if mode == "train":
         solver.train()
-    elif args.mode == "test":
+    elif mode == "test":
         solver.test()
-    elif args.mode == "test2":
-        solver.single_test()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--mode", type=str, default="train")
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--data_path", type=str, default="./AAPM-Mayo-CT-Challenge/")
-    parser.add_argument(
-        "--saved_path",
-        type=str,
-        default="/mnt/4b9cdae1-f581-4f95-aa23-5b45c0bdf521/wday/aapm_all_npy/aapm_all_npy/",
-    )  ## use 3mm data
-    parser.add_argument(
-        "--save_path",
-        type=str,
-        default=f"save/{datetime.now().strftime('%Y%m%d%H%M%S')}",
-    )
-    parser.add_argument("--result_fig", type=bool, default=True)
-
-    parser.add_argument("--num_epochs", type=int, default=20)  ## 200 or 2000
-    parser.add_argument("--print_iters", type=int, default=20)
-    parser.add_argument("--decay_iters", type=int, default=3000)
-    parser.add_argument(
-        "--save_iters", type=int, default=1500
-    )  ## the iterats~epochs*10 useless for now
-    parser.add_argument("--test_iters", type=int, default=40379)
-
-    parser.add_argument("--lr", type=float, default=1e-4)
-
-    parser.add_argument("--device", type=str)
-    parser.add_argument("--num_workers", type=int, default=7)
-
-    parser.add_argument("--model_name", type=str, default="REDCNN")
-    parser.add_argument("--image_size", type=int, default=512)
-    parser.add_argument("--dataset", type=str, default=None)
-    parser.add_argument("--test_data_range", type=float, default=1.0)
-    args = parser.parse_args()
-    main(args)
+    main()

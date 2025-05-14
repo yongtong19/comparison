@@ -18,3 +18,9 @@ save/
 
 # Logs
 logs/
+
+# Temp
+temp/
+
+# VSCode
+.vscode/
