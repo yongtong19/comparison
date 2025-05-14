@@ -1,16 +1,18 @@
 import os
 import time
-import numpy as np
+import datetime
 
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import autocast
+from torch.utils.data import DataLoader
 
 import models
 from metrics import compute_metrics
 from utils import printProgressBar
-from torch.utils.data import DataLoader
 
 
 class Solver(object):
@@ -41,7 +43,6 @@ class Solver(object):
         self.train_num_epochs = config["train_num_epochs"]
         self.train_log_interval = config["train_log_interval"]
         self.train_decay_interval = config["train_decay_interval"]
-        self.train_checkpoint_interval = config["train_checkpoint_interval"]
         self.train_lr = config["train_lr"]
         self.test_checkpoint_path = config["test_checkpoint_path"]
         self.test_data_range = config["test_data_range"]
@@ -69,11 +70,24 @@ class Solver(object):
 
         self.optimizer = optim.Adam(self.model.parameters(), self.train_lr)
 
-    def save_model(self, epoch, step):
+    def find_checkpoint(self):
+        if self.test_checkpoint_path:
+            return self.test_checkpoint_path
+        else:
+            # find the latest checkpoint under save_path by modified time
+            checkpoints = os.listdir(os.path.join(self.save_path, "checkpoints"))
+            checkpoints = [
+                os.path.join(self.save_path, "checkpoints", checkpoint)
+                for checkpoint in checkpoints
+            ]
+            return max(checkpoints, key=os.path.getmtime)
+
+    def save_model(self, epoch):
+        os.makedirs(os.path.join(self.save_path, "checkpoints"), exist_ok=True)
         checkpoint_path = os.path.join(
             self.save_path,
             "checkpoints",
-            "{}_{}_{}.ckpt".format(self.model_name, epoch, step),
+            f"{self.model_name}_{epoch}.ckpt",
         )
         torch.save(self.model.state_dict(), checkpoint_path)
         print(f"checkpoint saved: {checkpoint_path}")
@@ -81,15 +95,22 @@ class Solver(object):
     def load_model(self, checkpoint_path):
         self.model.load_state_dict(torch.load(checkpoint_path))
 
-    def lr_decay(self):
-        lr = self.train_lr * 0.5
+    def lr_decay(self, current_epoch):
+        min_lr = 1e-6
+        max_lr = self.train_lr
+        total_epochs = self.train_num_epochs
+
+        # Cosine annealing schedule
+        lr = min_lr + 0.5 * (max_lr - min_lr) * (
+            1 + np.cos(np.pi * current_epoch / total_epochs)
+        )
+
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = lr
 
     def train(self):
         cumulated_psnr = 0
         cumulated_ssim = 0
-        train_losses = []
         cumulated_steps = 0
         start_time = time.time()
         for epoch in range(1, self.train_num_epochs + 1):
@@ -122,12 +143,12 @@ class Solver(object):
 
                 cumulated_psnr += pred_result[0]
                 cumulated_ssim += pred_result[1]
-                train_losses.append(loss.item())
 
                 # log training progress
                 if cumulated_steps % self.train_log_interval == 0:
                     print(
-                        "EPOCH [{}/{}], STEP [{}/{}] \nLOSS: {:.8f}, TIME: {:.1f}s, AVG PSNR: {:.3f}, AVG SSIM: {:.3f}".format(
+                        "[{}] EPOCH [{}/{}], STEP [{}/{}] LOSS: {:.8f}, TIME: {:.1f}s, AVG PSNR: {:.3f}, AVG SSIM: {:.3f}".format(
+                            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             epoch,
                             self.train_num_epochs,
                             step,
@@ -144,40 +165,18 @@ class Solver(object):
                     self.train_decay_interval != 0
                     and cumulated_steps % self.train_decay_interval == 0
                 ):
-                    self.lr_decay()
+                    self.lr_decay(epoch)
 
-                # save model
-                if self.train_checkpoint_interval != 0:
-                    if cumulated_steps % self.train_checkpoint_interval == 0:
-                        self.save_model(epoch, step)
-                    np.save(
-                        os.path.join(
-                            self.save_path, "loss_{}.npy".format(cumulated_steps)
-                        ),
-                        np.array(train_losses),
-                        dtype=np.float32,
-                    )
-
-            if self.train_checkpoint_interval == 0:
-                self.save_model(epoch, step)
-                np.save(
-                    os.path.join(self.save_path, "loss_{}.npy".format(cumulated_steps)),
-                    np.array(train_losses),
-                    dtype=np.float32,
-                )
-
-        self.save_model(epoch, step)
-        np.save(
-            os.path.join(self.save_path, "loss_{}.npy".format(cumulated_steps)),
-            np.array(train_losses),
-            dtype=np.float32,
-        )
+            self.save_model(epoch)
 
     def test(self):
-        total_psnr = 0
-        total_ssim = 0
-
+        metrics = []
         os.makedirs(os.path.join(self.save_path, "test_result"), exist_ok=True)
+        if self.test_save_result:
+            os.makedirs(
+                os.path.join(self.save_path, "test_result", "predictions"),
+                exist_ok=True,
+            )
 
         with torch.no_grad():
             self.load_model(self.test_checkpoint_path)
@@ -195,13 +194,13 @@ class Solver(object):
                     data_range,
                 )
 
-                total_psnr += pred_result[0]
-                total_ssim += pred_result[1]
-
+                metrics.append(pred_result)
                 # save result figure
                 if self.test_save_result:
                     np.save(
-                        os.path.join(self.save_path, "test_result", f"{step}.npy"),
+                        os.path.join(
+                            self.save_path, "test_result", "predictions", f"{step}.npy"
+                        ),
                         prediction.cpu().numpy(),
                     )
 
@@ -212,12 +211,18 @@ class Solver(object):
                     suffix="Complete",
                     length=25,
                 )
-            test_result_str = "PSNR,SSIM\n{:.4f},{:.4f}".format(
-                total_psnr / len(self.data_loader),
-                total_ssim / len(self.data_loader),
+
+            metrics = pd.DataFrame(metrics, columns=["PSNR", "SSIM"])
+            metrics.to_csv(
+                os.path.join(self.save_path, "test_result", "metrics.csv"),
+                index=False,
             )
-            print(test_result_str)
+            print(
+                f"Average PSNR: {metrics['PSNR'].mean()}, Average SSIM: {metrics['SSIM'].mean()}"
+            )
             with open(
-                os.path.join(self.save_path, "test_result", "test_result.csv"), "w"
+                os.path.join(self.save_path, "test_result", "average_metrics.txt"), "w"
             ) as f:
-                f.write(test_result_str)
+                f.write(
+                    f"Average PSNR: {metrics['PSNR'].mean()}, Average SSIM: {metrics['SSIM'].mean()}"
+                )
